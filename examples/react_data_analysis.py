@@ -3,6 +3,7 @@ import os
 from pprint import pprint
 from typing import Optional
 
+# import qwen_agent.tools
 from examples.agent.react_chat import ReActChat
 
 # from qwen_agent.agents import ReActChat
@@ -22,10 +23,12 @@ def init_agent_service():
         "api_key": "sk-cd8f0b15a37f47729f2dc7bba934c587",
     }
     tools = ['code_interpreter']
-    bot = ReActChat(llm=llm_cfg,
-                    name='code interpreter',
-                    description='This agent can run code to solve the problem',
-                    function_list=tools)
+    bot = ReActChat(
+        llm=llm_cfg,
+        name="code interpreter",
+        description="This agent can run code to solve the problem",
+        function_list=tools,
+    )
     return bot
 
 

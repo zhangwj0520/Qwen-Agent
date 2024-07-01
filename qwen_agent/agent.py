@@ -46,6 +46,7 @@ class Agent(ABC):
         self.function_map = {}
         if function_list:
             for tool in function_list:
+                print("====inittools", tool)
                 self._init_tool(tool)
 
         self.system_message = system_message
@@ -163,6 +164,7 @@ class Agent(ABC):
         Returns:
             The output of tools.
         """
+        print("====tool_name", tool_name)
         if tool_name not in self.function_map:
             return f'Tool {tool_name} does not exists.'
         tool = self.function_map[tool_name]
@@ -202,6 +204,8 @@ class Agent(ABC):
             if tool_name in self.function_map:
                 logger.warning(f'Repeatedly adding tool {tool_name}, will use the newest tool in function list')
             self.function_map[tool_name] = TOOL_REGISTRY[tool_name](tool_cfg)
+
+            print("====self.function_map", self.function_map)
 
     def _detect_tool(self, message: Message) -> Tuple[bool, str, str, str]:
         """A built-in tool call detection for func_call format message.
