@@ -3,7 +3,9 @@ import os
 from pprint import pprint
 from typing import Optional
 
-from qwen_agent.agents import ReActChat
+from examples.agent.react_chat import ReActChat
+
+# from qwen_agent.agents import ReActChat
 from qwen_agent.gui import WebUI
 
 ROOT_RESOURCE = os.path.join(os.path.dirname(__file__), 'resource')
@@ -14,9 +16,10 @@ def init_agent_service():
         # 'model': 'Qwen/Qwen1.5-72B-Chat',
         # 'model_server': 'https://api.together.xyz',
         # 'api_key': os.getenv('TOGETHER_API_KEY'),
-        'model': 'qwen-max',
-        'model_server': 'dashscope',
-        'api_key': os.getenv('DASHSCOPE_API_KEY'),
+        # "model": "qwen-turbo",
+        "model": "qwen2-1.5b-instruct",
+        "model_server": "dashscope",
+        "api_key": "sk-cd8f0b15a37f47729f2dc7bba934c587",
     }
     tools = ['code_interpreter']
     bot = ReActChat(llm=llm_cfg,
@@ -26,8 +29,10 @@ def init_agent_service():
     return bot
 
 
-def test(query: str = 'pd.head the file first and then help me draw a line chart to show the changes in stock prices',
-         file: Optional[str] = os.path.join(ROOT_RESOURCE, 'stock_prices.csv')):
+def test(
+    query: str = "先读取文件，然后帮我画一个折线图来显示股价的变化",
+    file: Optional[str] = os.path.join(ROOT_RESOURCE, "stock_prices.csv"),
+):
     # Define the agent
     bot = init_agent_service()
 
@@ -40,7 +45,8 @@ def test(query: str = 'pd.head the file first and then help me draw a line chart
         messages.append({'role': 'user', 'content': [{'text': query}, {'file': file}]})
 
     for response in bot.run(messages):
-        pprint(response, indent=2)
+        # pprint(response, indent=2)
+        yield f"data: {response}\n\n"
 
 
 def app_tui():
@@ -80,6 +86,6 @@ def app_gui():
 
 
 if __name__ == '__main__':
-    # test()
+    test()
     # app_tui()
-    app_gui()
+    # app_gui()

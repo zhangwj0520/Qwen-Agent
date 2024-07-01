@@ -1,0 +1,206 @@
+import json
+import re
+from typing import Dict, Iterator, List, Literal, Optional, Tuple, Union
+
+from qwen_agent.agents.fncall_agent import FnCallAgent
+from qwen_agent.llm import BaseChatModel
+from qwen_agent.llm.schema import ASSISTANT, DEFAULT_SYSTEM_MESSAGE, Message
+from qwen_agent.settings import MAX_LLM_CALL_PER_RUN
+from qwen_agent.tools import BaseTool
+from qwen_agent.utils.utils import format_as_text_message, merge_generate_cfgs
+
+TOOL_DESC = (
+    "{name_for_model}: Call this tool to interact with the {name_for_human} API. "
+    "What is the {name_for_human} API useful for? {description_for_model} Parameters: {parameters} {args_format}"
+)
+
+PROMPT_REACT = """尽可能回答以下问题。您可以使用以下工具:
+
+{tool_descs}
+
+使用以下格式:
+
+AGENT-Question: the input question you must answer
+AGENT-Thought: you should always think about what to do
+AGENT-Action: the action to take, should be one of [{tool_names}]
+AGENT-Action Input: the input to the action
+AGENT-Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can be repeated zero or more times)
+AGENT-Thought: I now know the final answer
+AGENT-Final Answer: the final answer to the original input question
+
+Begin!
+
+AGENT-Question: {query}
+AGENT-Thought: """
+
+
+def get_action_and_text(input_string):
+    # Define the regex pattern
+    pattern = r"(Action Input|Action):[\s]+([\w\W]+)"
+
+    # Match the pattern against the input string
+    match = re.search(pattern, input_string)
+
+    # Check if the match was successful
+    if match:
+        # Get the matched groups
+        action, interpreter = match.groups()
+        return action, interpreter
+
+    else:
+        return None, None
+
+
+class ReActChat(FnCallAgent):
+    """This agent use ReAct format to call tools"""
+
+    def __init__(
+        self,
+        function_list: Optional[List[Union[str, Dict, BaseTool]]] = None,
+        llm: Optional[Union[Dict, BaseChatModel]] = None,
+        system_message: Optional[str] = DEFAULT_SYSTEM_MESSAGE,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        files: Optional[List[str]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            function_list=function_list,
+            llm=llm,
+            system_message=system_message,
+            name=name,
+            description=description,
+            files=files,
+            **kwargs,
+        )
+        self.extra_generate_cfg = merge_generate_cfgs(
+            base_generate_cfg=self.extra_generate_cfg,
+            new_generate_cfg={"stop": ["Observation:", "Observation:\n"]},
+        )
+
+    def _run(
+        self, messages: List[Message], lang: Literal["en", "zh"] = "en", **kwargs
+    ) -> Iterator[List[Message]]:
+        text_messages = self._prepend_react_prompt(messages, lang=lang)
+
+        num_llm_calls_available = MAX_LLM_CALL_PER_RUN
+        response: str = "AGENT-Thought: "
+        while num_llm_calls_available > 0:
+            num_llm_calls_available -= 1
+
+            # Display the streaming response
+            output = []
+            for output in self._call_llm(messages=text_messages):
+                if output:
+
+                    msgList = output[-1].content.split("AGENT-")
+                    newList = []
+                    for i, v in enumerate(msgList):
+                        print(i, v)
+                        if i == 0:
+                            newList.append(
+                                {
+                                    "type": "Thought",
+                                    "text": v.replace(r"(AGENT-|AGENT)", ""),
+                                }
+                            )
+                        else:
+                            action, interpreter = get_action_and_text(v)
+                            if action is not None:
+                                newList.append({"type": action, "text": interpreter})
+                    print(newList)
+
+                    # yield [Message(role=ASSISTANT, content=response + output[-1].content)]
+                    yield [
+                        Message(
+                            role=ASSISTANT,
+                            content=json.dumps(newList, ensure_ascii=False),
+                        )
+                    ]
+
+            # Accumulate the current response
+
+            if output:
+                response += output[-1].content
+
+            has_action, action, action_input, thought = self._detect_tool(
+                output[-1].content
+            )
+            if not has_action:
+                break
+
+            # Add the tool result
+            observation = self._call_tool(
+                action, action_input, messages=messages, **kwargs
+            )
+            observation = f"\nAGENT-Observation: {observation}\nAGENT-Thought: "
+            response += observation
+            yield [Message(role=ASSISTANT, content=response)]
+
+            if (not text_messages[-1].content.endswith("\nAGENT-Thought: ")) and (
+                not thought.startswith("\n")
+            ):
+                # Add the '\n' between '\nQuestion:' and the first 'Thought:'
+                text_messages[-1].content += "\n"
+            if action_input.startswith("```"):
+                # Add a newline for proper markdown rendering of code
+                action_input = "\n" + action_input
+            text_messages[-1].content += (
+                thought
+                + f"\nAGENT-Action: {action}\nAGENT-Action Input: {action_input}"
+                + observation
+            )
+
+    def _prepend_react_prompt(
+        self, messages: List[Message], lang: Literal["en", "zh"]
+    ) -> List[Message]:
+        tool_descs = []
+        for f in self.function_map.values():
+            function = f.function
+            name = function.get("name", None)
+            name_for_human = function.get("name_for_human", name)
+            name_for_model = function.get("name_for_model", name)
+            assert name_for_human and name_for_model
+            args_format = function.get("args_format", "")
+            tool_descs.append(
+                TOOL_DESC.format(
+                    name_for_human=name_for_human,
+                    name_for_model=name_for_model,
+                    description_for_model=function["description"],
+                    parameters=json.dumps(function["parameters"], ensure_ascii=False),
+                    args_format=args_format,
+                ).rstrip()
+            )
+        tool_descs = "\n\n".join(tool_descs)
+        tool_names = ",".join(tool.name for tool in self.function_map.values())
+        text_messages = [
+            format_as_text_message(m, add_upload_info=True, lang=lang) for m in messages
+        ]
+        text_messages[-1].content = PROMPT_REACT.format(
+            tool_descs=tool_descs,
+            tool_names=tool_names,
+            query=text_messages[-1].content,
+        )
+        return text_messages
+
+    def _detect_tool(self, text: str) -> Tuple[bool, str, str, str]:
+        special_func_token = "\nAGENT-Action:"
+        special_args_token = "\nAGENT-Action Input:"
+        special_obs_token = "\nAGENT-Observation:"
+        func_name, func_args = None, None
+        print("text", text)
+        i = text.rfind(special_func_token)
+        print("i", i)
+        j = text.rfind(special_args_token)
+        k = text.rfind(special_obs_token)
+        if 0 <= i < j:  # If the text has `Action` and `Action input`,
+            if k < j:  # but does not contain `Observation`,
+                # then it is likely that `Observation` is ommited by the LLM,
+                # because the output text may have discarded the stop word.
+                text = text.rstrip() + special_obs_token  # Add it back.
+            k = text.rfind(special_obs_token)
+            func_name = text[i + len(special_func_token) : j].strip()
+            func_args = text[j + len(special_args_token) : k].strip()
+            text = text[:i]  # Return the response before tool call, i.e., `Thought`
+        return (func_name is not None), func_name, func_args, text
