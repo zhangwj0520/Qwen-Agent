@@ -190,7 +190,6 @@ class ReActChat(FnCallAgent):
             tool_names=tool_names,
             query=text_messages[-1].content,
         )
-        print("text_messages", text_messages)
         return text_messages
 
     def _detect_tool(self, text: str) -> Tuple[bool, str, str, str]:

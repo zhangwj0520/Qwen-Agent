@@ -17,8 +17,8 @@ def init_agent_service():
         # 'model': 'Qwen/Qwen1.5-72B-Chat',
         # 'model_server': 'https://api.together.xyz',
         # 'api_key': os.getenv('TOGETHER_API_KEY'),
-        # "model": "qwen-turbo",
-        "model": "qwen2-1.5b-instruct",
+        "model": "qwen-turbo",
+        # "model": "qwen2-1.5b-instruct",
         "model_server": "dashscope",
         "api_key": "sk-cd8f0b15a37f47729f2dc7bba934c587",
     }
@@ -33,8 +33,10 @@ def init_agent_service():
 
 
 def test(
-    query: str = "先读取文件，然后帮我画一个折线图来显示股价的变化",
-    file: Optional[str] = os.path.join(ROOT_RESOURCE, "stock_prices.csv"),
+    # query: str = "先读取文件，然后帮我画一个折线图来显示股价的变化",
+    # query: str = "以时间维度分析各个街道人口变化情况",
+    query: str = "画一个折线图展示沌口街人口数变化",
+    file: Optional[str] = os.path.join(ROOT_RESOURCE, "person.csv"),
 ):
     # Define the agent
     bot = init_agent_service()
