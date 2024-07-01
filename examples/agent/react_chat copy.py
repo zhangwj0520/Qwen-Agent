@@ -26,8 +26,8 @@ AGENT-Question: the input question you must answer
 AGENT-Thought: you should always think about what to do
 AGENT-Action: the action to take, should be one of [{tool_names}]
 AGENT-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can be repeated zero or more times)
+AGENT-Observation: the result of the action
+... (this AGENT-Thought/AGENT-Action/AGENT-Action Input/AGENT-Observation can be repeated zero or more times)
 AGENT-Thought: I now know the final answer
 AGENT-Final Answer: the final answer to the original input question
 
@@ -39,7 +39,7 @@ AGENT-Thought: """
 
 def get_action_and_text(input_string):
     # Define the regex pattern
-    pattern = r"(Action Input|Action):[\s]+([\w\W]+)"
+    pattern = r"(Action Input|Action|Observation|Thought|Final Answer):[\s]+([\w\W]+)"
 
     # Match the pattern against the input string
     match = re.search(pattern, input_string)
@@ -78,7 +78,7 @@ class ReActChat(FnCallAgent):
         )
         self.extra_generate_cfg = merge_generate_cfgs(
             base_generate_cfg=self.extra_generate_cfg,
-            new_generate_cfg={"stop": ["Observation:", "Observation:\n"]},
+            new_generate_cfg={"stop": ["AGENT-Observation:", "AGENT-Observation:\n"]},
         )
 
     def _run(
@@ -136,10 +136,8 @@ class ReActChat(FnCallAgent):
             observation = self._call_tool(
                 action, action_input, messages=messages, **kwargs
             )
-            print("observation", observation)
-            observation = f"\nObservation: {observation}\nThought: "
+            observation = f"\nAGENT-Observation: {observation}\nAGENT-Thought: "
             response += observation
-            print("response", response)
             yield [Message(role=ASSISTANT, content=response)]
 
             if (not text_messages[-1].content.endswith("\nAGENT-Thought: ")) and (

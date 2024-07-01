@@ -9,37 +9,35 @@ from qwen_agent.settings import MAX_LLM_CALL_PER_RUN
 from qwen_agent.tools import BaseTool
 from qwen_agent.utils.utils import format_as_text_message, merge_generate_cfgs
 
-# from qwen_agent.agents import ReActChat as QWReActChat
-
 TOOL_DESC = (
     "{name_for_model}: Call this tool to interact with the {name_for_human} API. "
     "What is the {name_for_human} API useful for? {description_for_model} Parameters: {parameters} {args_format}"
 )
 
-PROMPT_REACT = """尽可能回答以下问题。您可以使用以下工具:
+PROMPT_REACT = """Answer the following questions as best you can. You have access to the following tools:
 
 {tool_descs}
 
-使用以下格式:
+Use the following format:
 
-AGENT-Question: the input question you must answer
-AGENT-Thought: you should always think about what to do
-AGENT-Action: the action to take, should be one of [{tool_names}]
-AGENT-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can be repeated zero or more times)
-AGENT-Thought: I now know the final answer
-AGENT-Final Answer: the final answer to the original input question
+Question: the input question you must answer
+Agent Thought: you should always think about what to do
+Agent Action: the action to take, should be one of [{tool_names}]
+Agent Action Input: the input to the action
+Agent Observation: the result of the action
+... (this Agent Thought/Agent Action/Agent Action Input/Agent Observation can be repeated zero or more times)
+Agent Thought: I now know the final answer
+Agent Final Answer: the final answer to the original input question
 
 Begin!
 
-AGENT-Question: {query}
-AGENT-Thought: """
+Question: {query}
+Agent Thought: """
 
 
 def get_action_and_text(input_string):
     # Define the regex pattern
-    pattern = r"(Action Input|Action):[\s]+([\w\W]+)"
+    pattern = r"(Action Input|Action|Observation|Thought|Final Answer):[\s]+([\w\W]+)"
 
     # Match the pattern against the input string
     match = re.search(pattern, input_string)
@@ -52,8 +50,6 @@ def get_action_and_text(input_string):
 
     else:
         return None, None
-
-
 class ReActChat(FnCallAgent):
     """This agent use ReAct format to call tools"""
 
@@ -78,7 +74,7 @@ class ReActChat(FnCallAgent):
         )
         self.extra_generate_cfg = merge_generate_cfgs(
             base_generate_cfg=self.extra_generate_cfg,
-            new_generate_cfg={"stop": ["Observation:", "Observation:\n"]},
+            new_generate_cfg={"stop": ["Agent Observation:", "Agent Observation:\n"]},
         )
 
     def _run(
@@ -87,7 +83,7 @@ class ReActChat(FnCallAgent):
         text_messages = self._prepend_react_prompt(messages, lang=lang)
 
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
-        response: str = "AGENT-Thought: "
+        response: str = "Agent Thought: "
         while num_llm_calls_available > 0:
             num_llm_calls_available -= 1
 
@@ -95,24 +91,23 @@ class ReActChat(FnCallAgent):
             output = []
             for output in self._call_llm(messages=text_messages):
                 if output:
-
-                    msgList = output[-1].content.split("AGENT-")
+                    # yield [
+                    #     Message(role=ASSISTANT, content=response + output[-1].content)
+                    # ]
+                    msgList = output[-1].content.split("Agent ")
                     newList = []
                     for i, v in enumerate(msgList):
                         if i == 0:
                             newList.append(
                                 {
                                     "type": "Thought",
-                                    "text": v.replace(r"(AGENT-|AGENT)", ""),
+                                    "text": v.replace(r"(Agent |Agent)", ""),
                                 }
                             )
                         else:
                             action, interpreter = get_action_and_text(v)
                             if action is not None:
                                 newList.append({"type": action, "text": interpreter})
-                    # print(newList)
-
-                    # yield [Message(role=ASSISTANT, content=response + output[-1].content)]
                     yield [
                         Message(
                             role=ASSISTANT,
@@ -121,14 +116,12 @@ class ReActChat(FnCallAgent):
                     ]
 
             # Accumulate the current response
-
             if output:
                 response += output[-1].content
 
             has_action, action, action_input, thought = self._detect_tool(
                 output[-1].content
             )
-
             if not has_action:
                 break
 
@@ -136,13 +129,24 @@ class ReActChat(FnCallAgent):
             observation = self._call_tool(
                 action, action_input, messages=messages, **kwargs
             )
-            print("observation", observation)
-            observation = f"\nObservation: {observation}\nThought: "
+            observation = f"\nAgent Observation: {observation}\nAgent Thought: "
             response += observation
-            print("response", response)
-            yield [Message(role=ASSISTANT, content=response)]
+            # yield [Message(role=ASSISTANT, content=response)]
+            msgList = response.split("Agent ")
+            newList = []
+            for i, v in enumerate(msgList):
+                action, interpreter = get_action_and_text(v)
+                if action is not None:
+                    newList.append({"type": action, "text": interpreter})
 
-            if (not text_messages[-1].content.endswith("\nAGENT-Thought: ")) and (
+            yield [
+                Message(
+                    role=ASSISTANT,
+                    content=json.dumps(newList, ensure_ascii=False),
+                )
+            ]
+
+            if (not text_messages[-1].content.endswith("\nAgent Thought: ")) and (
                 not thought.startswith("\n")
             ):
                 # Add the '\n' between '\nQuestion:' and the first 'Thought:'
@@ -152,7 +156,7 @@ class ReActChat(FnCallAgent):
                 action_input = "\n" + action_input
             text_messages[-1].content += (
                 thought
-                + f"\nAGENT-Action: {action}\nAGENT-Action Input: {action_input}"
+                + f"\nAgent Action: {action}\nAgent Action Input: {action_input}"
                 + observation
             )
 
@@ -178,7 +182,6 @@ class ReActChat(FnCallAgent):
             )
         tool_descs = "\n\n".join(tool_descs)
         tool_names = ",".join(tool.name for tool in self.function_map.values())
-        print("tool_names", tool_names)
         text_messages = [
             format_as_text_message(m, add_upload_info=True, lang=lang) for m in messages
         ]
@@ -187,12 +190,13 @@ class ReActChat(FnCallAgent):
             tool_names=tool_names,
             query=text_messages[-1].content,
         )
+        print("text_messages", text_messages)
         return text_messages
 
     def _detect_tool(self, text: str) -> Tuple[bool, str, str, str]:
-        special_func_token = "\nAGENT-Action:"
-        special_args_token = "\nAGENT-Action Input:"
-        special_obs_token = "\nAGENT-Observation:"
+        special_func_token = "\nAgent Action:"
+        special_args_token = "\nAgent Action Input:"
+        special_obs_token = "\nAgent Observation:"
         func_name, func_args = None, None
         i = text.rfind(special_func_token)
         j = text.rfind(special_args_token)
